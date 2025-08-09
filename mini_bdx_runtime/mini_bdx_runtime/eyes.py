@@ -1,82 +1,83 @@
 """
-Update: This module has been modified to use the pigpio library for driving
-the eye LEDs on a remote Raspberry Pi Zero. The Pi Zero is connected to
-the main Raspberry Pi 4 via USB (gadget mode) and exposes its GPIO pins over
-the network using the pigpio daemon. The IP address of the Pi Zero must
-be supplied when creating the `Eyes` instance (defaults to ``192.168.7.2``).
+This module provides an ``Eyes`` class capable of driving two WS2812 ("NeoPixel")
+RGB LEDs connected to a Raspberry Pi Zero via the ``pigpio`` library.  It
+replaces the earlier design which used two simple GPIO pins to blink the eyes.
 
-Instead of using CircuitPython's ``digitalio`` and ``board`` modules, we
-instantiate a ``pigpio.pi`` object and configure the relevant pins as
-outputs. The pins are referenced using their Broadcom (BCM) numbers, which
-match the ``board.Dxx`` naming convention used previously (e.g. ``board.D24``
-corresponds to BCM 24).
+The LEDs are connected in series to a single data pin (GPIO 23 on the Pi
+Zero).  Each LED can be independently set to a 24‑bit colour.  The class
+supports blinking with random intervals and cycling through a list of colours.
 
-To blink the LEDs, this class writes a high (1) or low (0) value to both
-pins using ``pi.write``. When stopping, the pins are explicitly set low and
-the pigpio connection is terminated.
+Usage example::
+
+    from mini_bdx_runtime.eyes import Eyes
+
+    eyes = Eyes(host="192.168.7.2")
+    eyes.cycle_color()  # change to next colour
+    # ... later ...
+    eyes.stop()  # cleanly stop the blinking thread and pigpio
+
 """
 
 import pigpio
 import random
 import time
 from threading import Thread, Event
+from typing import List, Tuple
 
-# BCM pin numbers corresponding to the eye LEDs on the Pi Zero. These match
-# the ``board.Dxx`` names previously used (D24 → BCM 24, D23 → BCM 23).
-LEFT_EYE_PIN = 24
-RIGHT_EYE_PIN = 23
+# Single data pin for both WS2812 eye LEDs
+DATA_PIN: int = 23
+
+# Sequence of colours for cycling (RGB)
+DEFAULT_COLOURS: List[Tuple[int, int, int]] = [
+    (255, 255, 255),  # white
+    (255, 0, 0),      # red
+    (255, 165, 0),    # orange
+    (0, 255, 0),      # green
+    (0, 0, 255),      # blue
+    (0, 255, 255),    # light blue
+]
 
 
 class Eyes:
-    """Controls blinking of two eye LEDs via a remote pigpio daemon.
+    """Control and animate two WS2812 eye LEDs via a remote pigpio daemon."""
 
-    Parameters
-    ----------
-    host : str, optional
-        IP address or hostname of the pigpio daemon running on the Pi Zero.
-        Defaults to ``"192.168.7.2"``. Change this if your Pi Zero uses a
-        different IP address.
-    blink_duration : float, optional
-        Duration (in seconds) that the eyes remain closed for each blink.
-    min_interval : float, optional
-        Minimum time (in seconds) between blinks.
-    max_interval : float, optional
-        Maximum time (in seconds) between blinks.
-    """
-
-    def __init__(self, host: str = "192.168.7.2", blink_duration: float = 0.1,
-                 min_interval: float = 1.0, max_interval: float = 4.0) -> None:
-        # Establish a remote connection to the pigpio daemon running on the
-        # Raspberry Pi Zero. If the connection fails, ``pigpio.pi`` will
-        # return an object with ``connected`` set to 0.
+    def __init__(self, host: str = "192.168.7.2",
+                 blink_duration: float = 0.1,
+                 min_interval: float = 1.0,
+                 max_interval: float = 4.0,
+                 colours: List[Tuple[int, int, int]] | None = None) -> None:
+        # Connect to the remote pigpiod
         self.pi = pigpio.pi(host)
-        if not self.pi.connected:
-            raise RuntimeError(f"Failed to connect to pigpio daemon on {host}")
 
-        # Configure the eye pins as outputs and start with the LEDs off.
-        self.left_pin = LEFT_EYE_PIN
-        self.right_pin = RIGHT_EYE_PIN
-        self.pi.set_mode(self.left_pin, pigpio.OUTPUT)
-        self.pi.set_mode(self.right_pin, pigpio.OUTPUT)
-        self.pi.write(self.left_pin, 0)
-        self.pi.write(self.right_pin, 0)
+        # Configure the single data pin
+        self.data_pin = DATA_PIN
+        self.pi.set_mode(self.data_pin, pigpio.OUTPUT)
+        self.pi.write(self.data_pin, 0)
 
-        self.blink_duration: float = blink_duration
-        self.min_interval: float = min_interval
-        self.max_interval: float = max_interval
+        # Blinking configuration
+        self.blink_duration = blink_duration
+        self.min_interval = min_interval
+        self.max_interval = max_interval
 
-        # Threading setup for blinking logic.
-        self._stop_event: Event = Event()
-        self._thread: Thread = Thread(target=self.run, daemon=True)
+        # Colour state
+        self.colours = colours if colours else list(DEFAULT_COLOURS)
+        self.color_index = 0
+        self.current_color = self.colours[self.color_index]
+
+        # Threading setup for blinking logic
+        self._stop_event = Event()
+        self._thread = Thread(target=self.run, daemon=True)
         self._thread.start()
 
     def _set_eyes(self, state: bool) -> None:
-        """Set both eye LEDs on (True) or off (False)."""
-        value = 1 if state else 0
-        self.pi.write(self.left_pin, value)
-        self.pi.write(self.right_pin, value)
+        """Set both eyes to the current colour if ``state`` is True, else off."""
+        if state:
+            self.set_color(self.current_color)
+        else:
+            self.set_color((0, 0, 0))
 
-    def run(self):
+    def run(self) -> None:
+        """Background blinking thread."""
         try:
             while not self._stop_event.is_set():
                 self._set_eyes(False)
@@ -88,21 +89,55 @@ class Eyes:
             print(f"Error in eye thread: {err}")
             self._stop_event.set()
 
-    def stop(self):
-        """Stop the blinking thread and release resources."""
+    def stop(self) -> None:
+        """Stop the blinking thread and release pigpio resources."""
         self._stop_event.set()
         self._thread.join()
-        # Ensure the LEDs are turned off before closing the connection.
         self._set_eyes(False)
-        # Terminate connection to the pigpio daemon.
         self.pi.stop()
 
+    # ------------------------------------------------------------------
+    # Colour control API
+    # ------------------------------------------------------------------
+    def _build_wave(self, colour: Tuple[int, int, int]) -> List[pigpio.pulse]:
+        """Construct pigpio waveform pulses for two WS2812 LEDs from an RGB colour."""
+        red, green, blue = colour
+        data_bytes = [green, red, blue] * 2
+        pulses: List[pigpio.pulse] = []
+        for byte in data_bytes:
+            for bit in range(8):
+                if byte & (1 << (7 - bit)):
+                    # Logic‑1: longer high pulse
+                    pulses.append(pigpio.pulse(1 << self.data_pin, 0, 2))
+                    pulses.append(pigpio.pulse(0, 1 << self.data_pin, 1))
+                else:
+                    # Logic‑0: shorter high pulse
+                    pulses.append(pigpio.pulse(1 << self.data_pin, 0, 1))
+                    pulses.append(pigpio.pulse(0, 1 << self.data_pin, 2))
+        # Latch period
+        pulses.append(pigpio.pulse(0, 1 << self.data_pin, 50))
+        return pulses
 
-if __name__ == "__main__":
-    e = Eyes()
-    try:
-        while True:
-            time.sleep(1)
-    finally:
-        e.stop()
+    def set_color(self, colour: Tuple[int, int, int]) -> None:
+        """Send the given colour to both LEDs immediately."""
+        pulses = self._build_wave(colour)
+        self.pi.wave_add_generic(pulses)
+        wid = self.pi.wave_create()
+        if wid < 0:
+            raise RuntimeError("Failed to create WS2812 waveform")
+        self.pi.wave_send_once(wid)
+        while self.pi.wave_tx_busy():
+            time.sleep(0.001)
+        self.pi.wave_delete(wid)
+        if colour != (0, 0, 0):
+            self.current_color = colour
 
+    def cycle_color(self) -> None:
+        """Advance to the next colour and update the eyes."""
+        self.color_index = (self.color_index + 1) % len(self.colours)
+        self.current_color = self.colours[self.color_index]
+        self.set_color(self.current_color)
+
+    def get_current_color(self) -> Tuple[int, int, int]:
+        """Return the currently selected RGB colour."""
+        return self.current_color
