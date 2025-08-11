@@ -21,7 +21,7 @@ Usage example::
 import pigpio
 import random
 import time
-from threading import Thread, Event
+from threading import Thread, Event, Lock
 from typing import List, Tuple
 
 # Single data pin for both WS2812 eye LEDs
@@ -65,6 +65,7 @@ class Eyes:
         self.current_color = self.colours[self.color_index]
 
         # Threading setup for blinking logic
+        self._wave_lock = Lock()
         self._stop_event = Event()
         self._thread = Thread(target=self.run, daemon=True)
         self._thread.start()
@@ -120,15 +121,16 @@ class Eyes:
 
     def set_color(self, colour: Tuple[int, int, int]) -> None:
         """Send the given colour to both LEDs immediately."""
-        pulses = self._build_wave(colour)
-        self.pi.wave_add_generic(pulses)
-        wid = self.pi.wave_create()
-        if wid < 0:
-            raise RuntimeError("Failed to create WS2812 waveform")
-        self.pi.wave_send_once(wid)
-        while self.pi.wave_tx_busy():
-            time.sleep(0.001)
-        self.pi.wave_delete(wid)
+        with self._wave_lock:
+            pulses = self._build_wave(colour)
+            self.pi.wave_add_generic(pulses)
+            wid = self.pi.wave_create()
+            if wid < 0:
+                raise RuntimeError("Failed to create WS2812 waveform")
+            self.pi.wave_send_once(wid)
+            while self.pi.wave_tx_busy():
+                time.sleep(0.001)
+            self.pi.wave_delete(wid)
         if colour != (0, 0, 0):
             self.current_color = colour
 
