@@ -11,13 +11,14 @@ Usage example::
 
     from mini_bdx_runtime.eyes import Eyes
 
-    eyes = Eyes(host="192.168.7.2")
+    eyes = Eyes()  # uses environment variables or localhost by default
     eyes.cycle_color()  # change to next colour
     # ... later ...
     eyes.stop()  # cleanly stop the blinking thread and pigpio
 
 """
 
+import os
 import pigpio
 import random
 import time
@@ -41,14 +42,26 @@ DEFAULT_COLOURS: List[Tuple[int, int, int]] = [
 class Eyes:
     """Control and animate two WS2812 eye LEDs via a remote pigpio daemon."""
 
-    def __init__(self, host: str = "192.168.7.2",
+    def __init__(self, host: str | None = None,
+                 port: int | None = None,
                  blink_duration: float = 0.1,
                  min_interval: float = 1.0,
                  max_interval: float = 4.0,
                  colours: List[Tuple[int, int, int]] | None = None) -> None:
-        # Connect to the remote pigpiod. pigpio<1.79 does not expose
-        # ``DEFAULT_PORT`` so fall back to the conventional 8888 port.
-        port = getattr(pigpio, "DEFAULT_PORT", 8888)
+        """Initialise an ``Eyes`` instance.
+
+        If ``host`` or ``port`` are not specified they are taken from the
+        ``PIGPIO_ADDR`` and ``PIGPIO_PORT`` environment variables respectively,
+        falling back to ``localhost`` and pigpio's default port.
+        """
+
+        if host is None:
+            host = os.getenv("PIGPIO_ADDR", "localhost")
+        if port is None:
+            port = int(os.getenv(
+                "PIGPIO_PORT", getattr(pigpio, "DEFAULT_PORT", 8888)
+            ))
+
         self.pi = pigpio.pi(host, port)
         if not self.pi.connected:
             raise RuntimeError(
