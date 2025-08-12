@@ -12,7 +12,13 @@ def main() -> None:
                         help="Delay between colour changes in seconds")
     args = parser.parse_args()
 
-    eyes = Eyes(host=args.host, blink_duration=0.0, min_interval=1.0, max_interval=1.0)
+    try:
+        eyes = Eyes(host=args.host, blink_duration=0.0,
+                    min_interval=1.0, max_interval=1.0)
+    except RuntimeError as exc:
+        print(f"Eyes initialisation failed: {exc}")
+        return
+
     try:
         while True:
             eyes.cycle_color()
