@@ -46,8 +46,9 @@ class Eyes:
                  min_interval: float = 1.0,
                  max_interval: float = 4.0,
                  colours: List[Tuple[int, int, int]] | None = None) -> None:
-        # Connect to the remote pigpiod
-        port = pigpio.DEFAULT_PORT
+        # Connect to the remote pigpiod. pigpio<1.79 does not expose
+        # ``DEFAULT_PORT`` so fall back to the conventional 8888 port.
+        port = getattr(pigpio, "DEFAULT_PORT", 8888)
         self.pi = pigpio.pi(host, port)
         if not self.pi.connected:
             raise RuntimeError(
