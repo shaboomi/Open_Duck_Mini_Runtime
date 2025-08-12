@@ -132,6 +132,7 @@ class Eyes:
         """Send the given colour to both LEDs immediately."""
         with self._wave_lock:
             pulses = self._build_wave(colour)
+            self.pi.wave_clear()
             self.pi.wave_add_generic(pulses)
             wid = self.pi.wave_create()
             if wid < 0:
