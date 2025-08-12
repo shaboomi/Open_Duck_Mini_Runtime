@@ -47,7 +47,12 @@ class Eyes:
                  max_interval: float = 4.0,
                  colours: List[Tuple[int, int, int]] | None = None) -> None:
         # Connect to the remote pigpiod
-        self.pi = pigpio.pi(host)
+        port = pigpio.DEFAULT_PORT
+        self.pi = pigpio.pi(host, port)
+        if not self.pi.connected:
+            raise RuntimeError(
+                f"Failed to connect to pigpio daemon on {host}:{port}"
+            )
 
         # Configure the single data pin
         self.data_pin = DATA_PIN
