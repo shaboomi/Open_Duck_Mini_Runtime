@@ -72,6 +72,10 @@ class Eyes:
         # Threading setup for blinking logic
         self._wave_lock = Lock()
         self._stop_event = Event()
+
+        # Light up the LEDs immediately with the initial colour
+        self.set_color(self.current_color)
+
         self._thread = Thread(target=self.run, daemon=True)
         self._thread.start()
 
